@@ -36,15 +36,18 @@ test_samples = []
 Y_test = []
 baseline_media_label = []
 baseline_semana_label = []
+baseline_extraction_label = []
 baseline_id_label = []
 test_media_label = []
 test_semana_label = []
+test_extraction_label = []
 test_id_label = []
 
 for medio in medios:
     for semana in semanas:
         for clase in clases:
-            ruta = f'/export/data_ml4ds/bacteria_id/C_diff/Reproducibilidad/ClostiRepro/ClostriRepro/Reproducibilidad No extracción/{medio}/{semana}/{clase}' 
+            ruta = f'/export/data_ml4ds/bacteria_id/C_diff/Reproducibilidad/ClostiRepro/ClostriRepro/Reproducibilidad No extracción/{medio}/{semana}/{clase}'
+            ruta_pe = f'/export/data_ml4ds/bacteria_id/C_diff/Reproducibilidad/ClostiRepro/ClostriRepro/Reproducibilidad Extracción/{medio}/{semana}/{clase}' 
             if os.path.exists(ruta):
                 for f in os.listdir(ruta):
                     ruta_f = os.path.join(ruta, f)
@@ -52,6 +55,7 @@ for medio in medios:
                         baseline_id_label.append(f.split('_')[0])
                         baseline_media_label.append(medio)
                         baseline_semana_label.append(semana)
+                        baseline_extraction_label.append(0)
                         if 'mzml' in ruta_f:
                             run = pymzml.run.Reader(ruta_f)
                             spectro = [r for r in run]
@@ -98,6 +102,28 @@ for medio in medios:
                             s = SpectrumObject().from_bruker(ruta_acqu, ruta_fid)
                             test_samples.append(s)
                             Y_test.append(clase)
+                for f in os.listdir(ruta_pe):
+                    ruta_f = os.path.join(ruta, f)
+                    test_id_label.append(f.split('_')[0])
+                    test_media_label.append(medio)
+                    test_semana_label.append(semana)
+                    # Si el archivo es un .mzml
+                    if 'mzml' in ruta_f:
+                        run = pymzml.run.Reader(ruta_f)
+                        spectro = [r for r in run]
+                        s = SpectrumObject(mz=spectro[0].mz, intensity=spectro[0].i)
+                        test_samples.append(s)
+                        Y_test.append(clase)
+                    else:
+                        carpetas = [subf for subf in os.listdir(ruta_f)]
+                        ruta_f = os.path.join(ruta, f, carpetas[0])
+                        fid_files = glob(os.path.join(ruta_f, '*', '1SLin', 'fid'))
+                        acqu_files = glob(os.path.join(ruta_f, '*', '1SLin', 'acqu'))
+                        ruta_fid = fid_files[0]
+                        ruta_acqu = acqu_files[0]
+                        s = SpectrumObject().from_bruker(ruta_acqu, ruta_fid)
+                        test_samples.append(s)
+                        Y_test.append(clase)
 # Encode labels
 label_mapping = {label: idx for idx, label in enumerate(CLASSES)}
 Y_train = np.array([label_mapping[label] for label in Y_train])

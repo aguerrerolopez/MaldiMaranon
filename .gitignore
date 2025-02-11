@@ -5,6 +5,7 @@ __pycache__/
 
 results/
 data/
+.h5
 
 # C extensions
 *.so
