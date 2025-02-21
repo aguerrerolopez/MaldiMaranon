@@ -23,9 +23,13 @@ from dataloader.SpectrumObject import SpectrumObject
 WEEKS = ['Semana 1', 'Semana 2', 'Semana 3']
 CLASSES = ['RT023', 'RT027', 'RT078', 'RT106', 'RT165', 'RT181']
 MEDIA_NOPE = ['Medio Ch', 'Medio Br', 'Medio Cl', 'Medio Sc', 'GU', 'Medio Fa']
-MEDIA_PE   = ['Medio Ch', 'Medio Br', 'Medio Cl', 'Medio Sc', 'GU', 'Medio Fa']
+MEDIA_PE   = ['Chx', 'Brx', 'Clx', 'Scx', 'GUx', 'Fax']
 # For variability evaluation we consider five different media
-EVAL_MEDIA = ["Medio Ch", "Medio Br", "Medio Cl", "Medio Sc", "Medio Fa"]
+EVAL_MEDIA = ['Medio Ch', 'Medio Br', 'Medio Cl', 'Medio Sc', 'Medio Fa']
+EVAL_TIME = ['Semana 1', 'Semana 2', 'Semana 3']
+EVAL_HOSP = ['Medio Ch', 'GU']
+EVAL_PE = ['Medio Ch', 'Chx']
+
 
 # Preprocessing pipeline (as you use in your other code)
 binning_step = 3
@@ -176,9 +180,9 @@ def baseline_one_vs_rest_rf(train_samples, K=10, step_bin=3, offset=2000):
 
 import matplotlib.ticker as ticker
 
-def evaluate_variability(all_samples, baseline_biomarkers, window=50, step_bin=3, offset=2000):
+def evaluate_variability(all_samples, baseline_biomarkers, eval = "eval_media", window=50, step_bin=3, offset=2000):
     """
-    Evaluate variability on week 1, NoPE samples from various media.
+    Evaluate variability on what's asked on EVAL.
     For each ribotype and for each baseline biomarker, generate a MALDI plot with a zoom of ±window bins.
     The x-axis is in Dalton: (bin index * step_bin + offset).
     
@@ -188,16 +192,35 @@ def evaluate_variability(all_samples, baseline_biomarkers, window=50, step_bin=3
          with a width of 3 Dalton (i.e. ±1.5 Da).
       3. Grid lines are added every 1 Dalton along the x-axis.
     """
-    # Filter week 1, NoPE samples from evaluation media
-    eval_samples = [d for d in all_samples if d['week'] == 'Semana 1' 
+    ############## modify this to do the followign, sometimes the user will ask eval= [semana 1 vs semana 2 vs semana 3], other eval = [medio A vs medio B]
+    if eval == "eval_media":
+        EVAL = ['Medio Ch', 'Medio Br', 'Medio Cl', 'Medio Sc', 'Medio Fa']
+        eval_samples = [d for d in all_samples if d['week'] == 'Semana 1' 
                     and d['extraction_type'] == 'NoPE' 
-                    and d['media'] in EVAL_MEDIA]
+                    and d['media'] in EVAL]
+    if eval == "eval_time":
+        EVAL = ['Semana 1', 'Semana 2', 'Semana 3']
+        eval_samples = [d for d in all_samples if d['media'] == 'Medio Ch' 
+                    and d['extraction_type'] == 'NoPE' 
+                    and d['week'] in EVAL]
+    if eval == "eval_hosp":
+        EVAL = ['Medio Ch', 'GU']
+        eval_samples = [d for d in all_samples if d['week'] == 'Semana 1' 
+                    and d['extraction_type'] == 'NoPE' 
+                    and d['media'] in EVAL]
+    if eval == "eval_pe":
+        EVAL = ['Medio Ch', 'Chx']
+        eval_samples = [d for d in all_samples if d['week'] == 'Semana 1'
+                    and d['media'] in EVAL]
+    
+    # Filter week 1, NoPE samples from evaluation media
+    
     # Organize samples by ribotype and media; only positive samples for that ribotype are grouped.
-    data_by_media = {ribo: {m: [] for m in EVAL_MEDIA} for ribo in CLASSES}
+    data_by_media = {ribo: {m: [] for m in EVAL} for ribo in CLASSES}
     for sample in eval_samples:
         ribo = sample['class']
         media = sample['media']
-        if ribo in CLASSES and media in EVAL_MEDIA:
+        if ribo in CLASSES and media in EVAL:
             data_by_media[ribo][media].append(sample)
     
     for ribo in CLASSES:
@@ -253,7 +276,11 @@ def evaluate_variability(all_samples, baseline_biomarkers, window=50, step_bin=3
             
             plt.legend()
             plt.tight_layout()
-            filename = f"results/mario/variability_{ribo}_biomarker_{feat_idx}.png"
+            # Check folder exists, if not create it
+            folder_path = f"results/mario/{eval}"
+            if not os.path.exists(folder_path):
+                os.makedirs(folder_path)
+            filename = f"results/mario/{eval}/variability_{ribo}_biomarker_{feat_idx}.png"
             plt.savefig(filename)
             plt.close()
             print(f"Saved variability plot: {filename}")
@@ -390,7 +417,7 @@ if __name__ == '__main__':
     all_data = read_all_data()
     
     # Parameters
-    number_biomarkers = 10
+    number_biomarkers = 20
     window = 10 # how much bins +/- from the biomarker to plot
     
     
@@ -401,8 +428,21 @@ if __name__ == '__main__':
     print(f"Baseline training samples: {len(baseline_train)}")
     baseline_biomarkers = baseline_one_vs_rest_rf(baseline_train, K=number_biomarkers, step_bin=binning_step, offset=2000)
     
+    # Step 3: Evaluate variability across different weeks (Medio Sc, NoPE)
+    evaluate_variability(all_data, baseline_biomarkers, eval="eval_time", window=window, step_bin=binning_step, offset=2000)
+    
     # STEP 2: Evaluate variability across different media (week 1, NoPE)
-    # evaluate_variability(all_data, baseline_biomarkers, window=window, step_bin=binning_step, offset=2000)
+    evaluate_variability(all_data, baseline_biomarkers, eval="eval_media", window=window, step_bin=binning_step, offset=2000)
+    
+    # Step 3: Evaluate variability across different extraction methods (week 1, Medio Ch)
+    evaluate_variability(all_data, baseline_biomarkers, eval="eval_pe", window=window, step_bin=binning_step, offset=2000)
+    
+    # Step 4: Evaluate variability across different extraction methods (week 1, Medio Ch, con PE, Ch24h vs Ch48h). 
+    evaluate_variability(all_data, baseline_biomarkers, eval="eval_extract", window=window, step_bin=binning_step, offset=2000)
+    
+    # Step 5: Evaluate variability across different hospitals (week 1 (new), Medio Ch, con PE, GU vs HGUGM)
+    evaluate_variability(all_data, baseline_biomarkers, eval="eval_hosp", window=window, step_bin=binning_step, offset=2000)
+    
     
     run_t_tests_for_all_biomarkers(all_data, baseline_biomarkers,
                                tolerance=1, step_bin=3, offset=2000,
