@@ -212,7 +212,9 @@ class Normalizer:
 
     def __call__(self, SpectrumObj):
         s = SpectrumObject()
-
+        # Check if the sum is nonzero
+        if SpectrumObj.intensity.sum() == 0:
+            return SpectrumObj
         s = SpectrumObject(
             intensity=SpectrumObj.intensity / SpectrumObj.intensity.sum() * self.sum,
             mz=SpectrumObj.mz,
@@ -242,6 +244,63 @@ class Trimmer:
             intensity=SpectrumObj.intensity[indices], mz=SpectrumObj.mz[indices]
         )
         return s
+
+
+import numpy as np
+
+class IntensityThresholding:
+    """Pre-processing function for thresholding low intensities in a spectrum.
+    
+    This function sets to 0 all intensity values that are lower than a computed threshold.
+    The threshold can be determined by different methods:
+    
+      - 'zscore': Uses the mean and standard deviation of the intensities.
+                The threshold is computed as: mean + (z_multiplier * std).
+      - 'percentile': Uses a specified percentile of the intensity distribution.
+      - 'fixed': A fixed absolute intensity value.
+      
+    Parameters
+    ----------
+    method : str, optional
+        The method to determine the threshold. Options are 'zscore', 'percentile', or 'fixed'.
+        Default is 'zscore'.
+    threshold : float, optional
+        The threshold value or multiplier:
+          - If method is 'zscore', this is the z-score multiplier (e.g. 1.0).
+          - If method is 'percentile', this is the percentile (0 to 100) below which intensities are zeroed, e.g. 10.
+          - If method is 'fixed', this is the absolute intensity threshold, e.g. 0.1.
+        Defaults: 1.0 for 'zscore', 10 for 'percentile', and 0.1 for 'fixed'.
+    """
+    
+    def __init__(self, method='percentile', threshold=None):
+        self.method = method.lower()
+        if self.method == 'zscore':
+            self.threshold = threshold if threshold is not None else 1.0  # multiplier for standard deviation
+        elif self.method == 'percentile':
+            self.threshold = threshold if threshold is not None else 10  # percentile (e.g., 10th percentile)
+        elif self.method == 'fixed':
+            self.threshold = threshold if threshold is not None else 0.1  # fixed intensity value
+        else:
+            raise ValueError("Method must be one of 'zscore', 'percentile', or 'fixed'")
+    
+    def __call__(self, SpectrumObj):
+        intensities = SpectrumObj.intensity
+        if self.method == 'zscore':
+            mean_val = np.mean(intensities)
+            std_val = np.std(intensities)
+            # Compute threshold as mean plus z-score multiplier times standard deviation.
+            computed_threshold = mean_val + self.threshold * std_val
+        elif self.method == 'percentile':
+            computed_threshold = np.percentile(intensities, self.threshold)
+        elif self.method == 'fixed':
+            computed_threshold = self.threshold
+        
+        # Set intensities below the computed threshold to 0.
+        new_intensity = np.where(intensities < computed_threshold, 0, intensities)
+        
+        # Return a new SpectrumObject with the thresholded intensities.
+        new_spectrum = SpectrumObj.__class__(intensity=new_intensity, mz=SpectrumObj.mz)
+        return new_spectrum
 
 
 class VarStabilizer:
@@ -490,6 +549,7 @@ class NoiseRemoval:
     """Pre-processing function for removing all peaks with intensities below a certain threshold. All peaks with intensities below the mean minus the standard deviation are removed.
     
     Implemented by Rafael Rodríguez Palomo.
+    ¡¡¡¡¡¡¡¡¡¡¡¡¡¡¡¡¡¡¡¡¡ DEPRECATED: Use IntensityThresholding instead !!!!!!!!!!!!!
     
         Parameters
         ----------

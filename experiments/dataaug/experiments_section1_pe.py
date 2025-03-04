@@ -46,8 +46,8 @@ test_id_label = []
 for medio in medios:
     for semana in semanas:
         for clase in clases:
-            ruta = f'/export/data_ml4ds/bacteria_id/C_diff/Reproducibilidad/ClostiRepro/ClostriRepro/Reproducibilidad No extracción/{medio}/{semana}/{clase}'
-            ruta_pe = f'/export/data_ml4ds/bacteria_id/C_diff/Reproducibilidad/ClostiRepro/ClostriRepro/Reproducibilidad Extracción/{medio}/{semana}/{clase}' 
+            ruta = f'../../data/ClostriRepro/Reproducibilidad No extracción/{medio}/{semana}/{clase}'
+            ruta_pe = f'../../data/ClostriRepro/Reproducibilidad Extracción/{medio}/{semana}/{clase}' 
             if os.path.exists(ruta):
                 for f in os.listdir(ruta):
                     ruta_f = os.path.join(ruta, f)

@@ -4,7 +4,7 @@ __pycache__/
 *$py.class
 
 results/
-data/
+data/clustering/
 .h5
 
 # C extensions

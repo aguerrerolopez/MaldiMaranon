@@ -53,7 +53,7 @@ clases = ['RT023', 'RT027', 'RT078', 'RT106', 'RT165', 'RT181']
 medios = ['Medio Ch', 'Medio Br', 'Medio Cl', 'Medio Sc', 'GU']
 
 # Define a base path (adjust if needed)
-base_path = '/export/data_ml4ds/bacteria_id/C_diff/Reproducibilidad/ClostiRepro/ClostriRepro/Reproducibilidad No extracción'
+base_path = '/ClostriRepro/Reproducibilidad No extracción'
 
 ###########################################
 # Load data from directory

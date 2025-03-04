@@ -15,7 +15,8 @@ from dataloader.preprocess import (
     BaselineCorrecter,
     Trimmer,
     Binner,
-    Normalizer
+    Normalizer,
+    IntensityThresholding,
 )
 from dataloader.SpectrumObject import SpectrumObject
 
@@ -40,6 +41,7 @@ preprocess_pipeline = SequentialPreprocessor(
     Normalizer(sum=1),
     Trimmer(),
     Binner(step=binning_step),
+    IntensityThresholding(method='zscore', threshold=1)
 )
 
 def _read_spectrum(path):
@@ -136,11 +138,9 @@ def vectorize_data(samples):
     """
     X = []
     y = []
-    # For each sample, process the raw spectrum using your pipeline
+    # For each sample, get the spectrum adn the label.
     for sample in samples:
-        # Apply the pipeline to the SpectrumObject
-        processed_vector = preprocess_pipeline(sample['spectrum']).intensity
-        X.append(processed_vector)
+        X.append(sample['spectrum'].intensity)
         y.append(sample['class'])
     X = np.array(X)
     y = np.array(y)
@@ -174,7 +174,6 @@ def baseline_one_vs_rest_rf(train_samples, K=10, step_bin=3, offset=2000):
             avg_intensity = np.mean(X[:, i])
             biomarkers.append((i, real_Da, avg_intensity))
         baseline_biomarkers[ribo] = biomarkers
-        print(f"Baseline biomarkers for {ribo}: {biomarkers}")
     return baseline_biomarkers
 
 
@@ -300,11 +299,10 @@ def compute_peak_centroid_window(vector, feat_idx, tolerance=1, step_bin=3, offs
     start = max(0, feat_idx - tolerance)
     end = min(n_features, feat_idx + tolerance + 1)  # +1 because slicing is exclusive
     bins_range = np.arange(start, end)
-    x_values = bins_range * step_bin + offset  # convert bin indices to Daltons
     intensities = vector[start:end]
-    if np.sum(intensities) == 0:
-        return np.nan
-    centroid = np.sum(x_values * intensities) / np.sum(intensities)
+    max_int = np.argmax(intensities)
+    n_feature_centroid = bins_range[max_int]
+    centroid = (n_feature_centroid * step_bin) + offset
     return centroid
 
 def compute_peak_intensity_window(vector, feat_idx, tolerance=1):
@@ -340,7 +338,7 @@ def run_t_tests_for_all_biomarkers(all_samples, baseline_biomarkers,
     for ribo in baseline_biomarkers:
         # For each baseline biomarker (each tuple: (feat_idx, real_Da, avg_intensity))
         for biomarker in baseline_biomarkers[ribo]:
-            feat_idx, real_Da, _ = biomarker
+            feat_idx, real_Da, avg_intensity_biomarker = biomarker
             # Dictionaries to store the computed centroids and intensities per media.
             centroids_by_media = {media: [] for media in EVAL_MEDIA}
             intensities_by_media = {media: [] for media in EVAL_MEDIA}
@@ -351,10 +349,8 @@ def run_t_tests_for_all_biomarkers(all_samples, baseline_biomarkers,
                     sample['extraction_type'] == 'NoPE' and 
                     sample['media'] in EVAL_MEDIA and 
                     sample['class'] == ribo):
-                    
-                    # Apply your real preprocessing pipeline to get the binned intensity vector.
-                    vector = preprocess_pipeline(sample['spectrum']).intensity
-                    
+
+                    vector = sample['spectrum'].intensity
                     centroid = compute_peak_centroid_window(vector, feat_idx,
                                                             tolerance=tolerance,
                                                             step_bin=step_bin,
@@ -383,12 +379,27 @@ def run_t_tests_for_all_biomarkers(all_samples, baseline_biomarkers,
                     continue  # Skip if no samples in this media.
                 
                 # T-test for the centroid (peak position shift) comparison.
-                t_stat_cent, p_val_cent = ttest_ind(baseline_centroids, media_centroids, nan_policy='omit')
+                t_stat_cent, p_val_cent = ttest_ind(baseline_centroids, media_centroids, nan_policy='raise')
                 # T-test for the peak intensity (height) comparison.
-                t_stat_int, p_val_int = ttest_ind(baseline_intensities, media_intensities, nan_policy='omit')
-                
+                t_stat_int, p_val_int = ttest_ind(baseline_intensities, media_intensities, nan_policy='raise')
+                              
                 # Mark as statistically different if either p-value is below 0.05.
                 stat_diff = (p_val_cent < 0.05) or (p_val_int < 0.05)
+                
+                # In case of a significant difference, print the results, add an extra column saying "displaced peak" or "different intensity"
+                if stat_diff:
+                    # if both thinks are different say the biggest
+                    if p_val_cent < 0.05 and p_val_int < 0.05:
+                        if p_val_cent < p_val_int:
+                            text = "shifted peak"
+                        else:
+                            text = "different intensity"
+                    elif p_val_cent < 0.05 and p_val_int > 0.05:
+                        text = "shifted peak"
+                    else:
+                        text = "different intensity"
+                else:
+                    text = "no significant difference"
                 
                 # Append the results.
                 results.append({
@@ -403,7 +414,8 @@ def run_t_tests_for_all_biomarkers(all_samples, baseline_biomarkers,
                     'centroid_p_value': p_val_cent,
                     'intensity_t_stat': t_stat_int,
                     'intensity_p_value': p_val_int,
-                    'Statistically_different_biomarker?': stat_diff
+                    'Statistically_different_biomarker?': stat_diff,
+                    'description': text
                 })
     
     # Save results to a CSV file.
@@ -415,6 +427,14 @@ def run_t_tests_for_all_biomarkers(all_samples, baseline_biomarkers,
 if __name__ == '__main__':
     print("Reading all data...")
     all_data = read_all_data()
+    
+    # Preprocess all data using the pipeline
+    for d in all_data:
+        if d['spectrum'].intensity.sum() == 0:
+            print(f"Warning: zero intensity spectrum found for {d['id_label']}. Skipping.")
+            # Remove it from the list
+            all_data.remove(d)
+        d['spectrum'] = preprocess_pipeline(d['spectrum'])
     
     # Parameters
     number_biomarkers = 20
@@ -428,9 +448,13 @@ if __name__ == '__main__':
     print(f"Baseline training samples: {len(baseline_train)}")
     baseline_biomarkers = baseline_one_vs_rest_rf(baseline_train, K=number_biomarkers, step_bin=binning_step, offset=2000)
     
-    # Step 3: Evaluate variability across different weeks (Medio Sc, NoPE)
-    evaluate_variability(all_data, baseline_biomarkers, eval="eval_time", window=window, step_bin=binning_step, offset=2000)
+    run_t_tests_for_all_biomarkers(all_data, baseline_biomarkers,
+                               tolerance=1, step_bin=3, offset=2000,
+                               output_csv='t_test_results.csv')
     
+    # # Step 3: Evaluate variability across different weeks (Medio Sc, NoPE)
+    # evaluate_variability(all_data, baseline_biomarkers, eval="eval_time", window=window, step_bin=binning_step, offset=2000)
+
     # STEP 2: Evaluate variability across different media (week 1, NoPE)
     evaluate_variability(all_data, baseline_biomarkers, eval="eval_media", window=window, step_bin=binning_step, offset=2000)
     
@@ -444,6 +468,4 @@ if __name__ == '__main__':
     evaluate_variability(all_data, baseline_biomarkers, eval="eval_hosp", window=window, step_bin=binning_step, offset=2000)
     
     
-    run_t_tests_for_all_biomarkers(all_data, baseline_biomarkers,
-                               tolerance=1, step_bin=3, offset=2000,
-                               output_csv='t_test_results.csv')
+
