@@ -221,6 +221,172 @@ class Normalizer:
         )
         return s
 
+from scipy.signal import find_peaks
+
+def detect_peaks(SpectrumObj, halfWindowSize=20, noiseMethod="MAD", SNR=2):
+    """
+    Detect peaks in a MALDI spectrum using a noise estimation method and find_peaks.
+    
+    Parameters
+    ----------
+    SpectrumObj : SpectrumObject
+        An object with attributes 'mz' (mass/charge values) and 'intensity' (intensity values).
+    halfWindowSize : int, optional
+        Half window size for local peak consideration (not used directly in this implementation, 
+        but can be used for further refinement), by default 20.
+    noiseMethod : str, optional
+        Method to estimate noise. Currently supports "MAD" (median absolute deviation), by default "MAD".
+    SNR : float, optional
+        Signal-to-noise ratio multiplier. Peaks must exceed (noise level * SNR) to be considered.
+    
+    Returns
+    -------
+    peaks_mz : array
+        An array of m/z values where peaks were detected.
+    peak_indices : array
+        Indices in SpectrumObj.mz corresponding to the detected peaks.
+    """
+    intensities = SpectrumObj.intensity
+    
+    # Estimate noise using the Median Absolute Deviation (MAD).
+    if noiseMethod.upper() == "MAD":
+        # Calculate the median and MAD.
+        median_intensity = np.median(intensities)
+        mad = np.median(np.abs(intensities - median_intensity))
+        # Estimate noise level: scale MAD to approximate standard deviation.
+        noise_level = 1.4826 * mad
+    else:
+        # Fallback: use a fixed noise level or raise an error.
+        raise ValueError("Unsupported noiseMethod: use 'MAD'.")
+    
+    # Define a threshold based on the noise level and desired SNR.
+    threshold = median_intensity + SNR * noise_level
+    
+    # Use SciPy's find_peaks to detect peaks above the threshold.
+    peak_indices, _ = find_peaks(intensities, height=threshold)
+    
+    # Extract m/z values corresponding to the detected peak indices.
+    peaks_mz = SpectrumObj.mz[peak_indices]
+    
+    return peaks_mz, peak_indices
+
+class Aligner:
+    """
+    Pre-processing function for aligning a MALDI spectrum to a reference peak list.
+    
+    Parameters
+    ----------
+    reference_peaks : array-like
+        The reference peak m/z values to which the spectra will be aligned.
+    halfWindowSize : int, optional
+        Half window size used in peak detection, by default 20.
+    noiseMethod : str, optional
+        Noise estimation method (see detect_peaks), by default "MAD".
+    SNR : float, optional
+        Signal-to-noise ratio threshold, by default 2.
+    tolerance : float, optional
+        Maximal relative deviation of a peak position to be considered as matching (e.g. 5e-6 for 5 ppm), by default 5e-6.
+    warpingMethod : str, optional
+        The warping method to use ("lowess" or "dtw"), by default "lowess".
+    allowNoMatches : bool, optional
+        If True, don't throw an error if no warping matches are found, by default False.
+    emptyNoMatches : bool, optional
+        If True, set intensity values to zero if no matches are found, by default False.
+    """
+    def __init__(self, reference_peaks, halfWindowSize=20, noiseMethod="MAD", SNR=2,
+                 tolerance=5e-6, warpingMethod="lowess", allowNoMatches=False, emptyNoMatches=False):
+        self.reference_peaks = np.array(reference_peaks)
+        self.halfWindowSize = halfWindowSize
+        self.noiseMethod = noiseMethod
+        self.SNR = SNR
+        self.tolerance = tolerance
+        self.warpingMethod = warpingMethod.lower()
+        self.allowNoMatches = allowNoMatches
+        self.emptyNoMatches = emptyNoMatches
+
+    def __call__(self, SpectrumObj):
+        # 1. Detect peaks in the input spectrum.
+        peaks = detect_peaks(SpectrumObj, halfWindowSize=self.halfWindowSize,
+                             noiseMethod=self.noiseMethod, SNR=self.SNR)
+        
+        # 2. Compute the warping function using the chosen method.
+        if self.warpingMethod == "lowess":
+            warp_func = self._compute_lowess_warping(peaks, self.reference_peaks, self.tolerance)
+        elif self.warpingMethod == "dtw":
+            warp_func = self._compute_dtw_warping(peaks, self.reference_peaks, self.tolerance)
+        else:
+            raise ValueError("Unsupported warping method: choose 'lowess' or 'dtw'.")
+        
+        # 3. If no warping function is found, handle according to settings.
+        if warp_func is None:
+            if self.emptyNoMatches:
+                new_intensity = np.zeros_like(SpectrumObj.intensity)
+                return SpectrumObject(intensity=new_intensity, mz=SpectrumObj.mz)
+            elif not self.allowNoMatches:
+                raise ValueError("No warping function could be computed for spectrum with id: {}".format(getattr(SpectrumObj, 'id', 'unknown')))
+        
+        # 4. Apply the warping function to the m/z axis.
+        new_mz = warp_func(SpectrumObj.mz)
+        # 5. Interpolate the intensities onto the new m/z grid.
+        new_intensity = np.interp(new_mz, SpectrumObj.mz, SpectrumObj.intensity)
+        
+        # 6. Return the warped SpectrumObject.
+        return SpectrumObject(intensity=new_intensity, mz=new_mz)
+
+    def _compute_lowess_warping(self, detected_peaks, ref_peaks, tolerance=9):
+        """
+        Compute a warping function using a lowess-based approach.
+        For demonstration, this dummy implementation matches detected peaks to reference peaks
+        if their relative difference is within the tolerance, then returns a simple linear interpolation.
+        """
+        detected_peaks = np.array(detected_peaks)
+        ref_peaks = np.array(ref_peaks)
+        
+        # Find matching peaks.
+        matches_detected = []
+        matches_ref = []
+        
+        for dp in detected_peaks:
+            if len(dp) > len(ref_peaks):
+                dp = dp[:len(ref_peaks)]
+            elif len(ref_peaks) > len(dp):
+                ref_peaks = ref_peaks[:len(dp)]
+                
+            # Compute relative differences.
+            diffs = np.abs(dp - ref_peaks) / ref_peaks
+            if np.any(diffs < tolerance):
+                idx = np.argmin(diffs)
+                matches_detected.append(dp)
+                matches_ref.append(ref_peaks[idx])
+        
+        # Require at least a few matches to build a warping function.
+        if len(matches_detected) < 3:
+            return None
+        
+        # Sort matches.
+        matches_detected = np.array(matches_detected)
+        matches_ref = np.array(matches_ref)
+        sort_idx = np.argsort(matches_detected)
+        matches_detected = matches_detected[sort_idx]
+        matches_ref = matches_ref[sort_idx]
+        
+        # Define a warping function using linear interpolation between matched peaks.
+        def warp_func(mz_vals):
+            return np.interp(mz_vals, matches_detected, matches_ref)
+        
+        return warp_func
+
+    def _compute_dtw_warping(self, detected_peaks, ref_peaks, tolerance):
+        """
+        Compute a warping function using a DTW-based approach.
+        This is a placeholder. In a real implementation, you would use a DTW algorithm to align detected peaks to ref_peaks.
+        Here we simply return an identity mapping as a dummy.
+        """
+        # For a real DTW, you might use a package like fastdtw or dtw-python.
+        def warp_func(mz_vals):
+            return mz_vals  # Dummy: no warping applied.
+        return warp_func
+
 
 class Trimmer:
     """Pre-processing function for trimming ends of a spectrum.
