@@ -8,7 +8,7 @@ from matplotlib.colors import ListedColormap, BoundaryNorm
 
 # 1) pick up all csv files except our own outputs
 csv_files = [
-    fn for fn in glob.glob("*.csv")
+    fn for fn in glob.glob("results/*.csv")
     if not fn.endswith("_variability_codes_matrix.csv")
 ]
 
@@ -97,7 +97,7 @@ for csv_file in csv_files:
     plt.ylabel("Biomarker (RTX_Feature bin_Peak Da)")
     plt.xlabel("Condition")
     plt.xticks(rotation=90)
-    plt.legend(handles=legend_I, bbox_to_anchor=(1.05,1), loc='upper left')
+    plt.legend(handles=legend_I, bbox_to_anchor=(1.05,1), loc='best')
     plt.tight_layout()
 
     out_I = f"{name}_heatmap_code_I.png"
@@ -118,7 +118,7 @@ for csv_file in csv_files:
     plt.ylabel("Biomarker (RTX_Feature bin_Peak Da)")
     plt.xlabel("Condition")
     plt.xticks(rotation=90)
-    plt.legend(handles=legend_S, bbox_to_anchor=(1.05,1), loc='upper left')
+    plt.legend(handles=legend_S, bbox_to_anchor=(1.05,1), loc='best')
     plt.tight_layout()
 
     out_S = f"{name}_heatmap_code_S.png"
