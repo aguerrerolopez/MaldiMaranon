@@ -1,3 +1,8 @@
+# ------------------------------------------------------------------------------
+#      VARIABILITY EXPERIMENTS USING EXPERT KNOWLEDGE (EK) BIOMARKERS
+# Instead of extracting biomarkers via machine learning, this script uses a
+# predefined list of m/z values (in Daltons) chosen by domain experts as biomarkers.
+# ------------------------------------------------------------------------------
 import os
 import numpy as np
 import pandas as pd
@@ -9,8 +14,6 @@ import matplotlib.pyplot as plt
 from scipy.stats import ttest_ind
 import matplotlib.ticker as ticker
 from pyopenms import MSSpectrum, SpectrumAlignment
-
-
 from dataloader.preprocess import (
     SequentialPreprocessor,
     VarStabilizer,
@@ -23,8 +26,21 @@ from dataloader.preprocess import (
     detect_peaks,
     Aligner
 )
+
 from dataloader.SpectrumObject import SpectrumObject
 CLASSES = ['RT023', 'RT027', 'RT078', 'RT106', 'RT165', 'RT181']
+
+# Define your expert knowledge biomarkers as a dict:
+# (Ribotype: list of m/z values in Da)
+EK_BIOMARKERS = {
+    "RT023": [2225, 2246, 2263, 3546, 4113, 4588, 4991, 5690, 6595, 6649, 7092],
+    "RT027": [3538, 4932, 5690, 6595, 6707, 7077],
+    "RT078": [3546, 5006, 5680, 6580, 6649, 7092],
+    "RT106": [2672, 3538, 4444, 4991, 5690, 6595, 6649, 7077],
+    "RT165": [3538, 4468, 4991, 5690, 6595, 6649, 7077],
+    "RT181": [3538, 4991, 5690, 6595, 6707, 7077]
+}
+
 
 # --- Helper Functions ---
 
@@ -77,7 +93,6 @@ def align_spectrum_to_reference(target_spec_obj, ref_spec_obj, tolerance=0.002):
     aligned_spec = SpectrumObject(mz=new_mz, intensity=target_spec_obj.intensity)
     return aligned_spec
 
-
 def spectrumobject_to_msspectrum(spec_obj):
     """
     Convert a SpectrumObject (with .mz and .intensity as numpy arrays)
@@ -100,8 +115,6 @@ def msspectrum_to_spectrumobject(ms_spec, original_intensity=None):
     # If you want to keep original intensity values (e.g., not warped), pass original_intensity.
     intensity = original_intensity if original_intensity is not None else intensity_arr
     return SpectrumObject(mz=np.array(mz_arr), intensity=np.array(intensity))
-
-
 
 def _read_spectrum(path):
     """Return a SpectrumObject from path (mzML or Bruker), or None if unfeasible."""
@@ -198,70 +211,9 @@ def compute_centroid(segment):
     bins = np.arange(segment.shape[1])
     return np.sum(segment * bins, axis=1) / (np.sum(segment, axis=1) + 1e-9)
 
-# --- Baseline Model Training and Biomarker Extraction ---
-
-def train_baseline_model(all_samples, n_biomarkers=20, bin_size=3, media="Medio Sc", week="Semana 1", extraction="NoPE"):
-    """
-    Train a separate Random Forest classifier for each ribotype in a one-vs-rest manner.
-    Baseline samples are those from media 'Medio Sc', week 'Semana 1', and extraction 'NoPE'.
-    
-    For each ribotype, the function extracts the top n_biomarkers features based on feature importance.
-    
-    Parameters
-    ----------
-    all_samples : list
-        List of sample dictionaries.
-    n_biomarkers : int, optional
-        Number of biomarkers (features) to extract for each ribotype, by default 20.
-    bin_size : int, optional
-        The step factor for converting a feature index to Dalton, by default 3.
-    
-    Returns
-    -------
-    rf_models : dict
-        A dictionary mapping ribotype to its trained Random Forest classifier.
-    biomarkers_info : dict
-        A dictionary mapping ribotype to a list of tuples (feature_index, peak_Da)
-        representing the top biomarkers for that ribotype.
-    """
-    # Filter baseline samples: media 'Medio Sc', week 'Semana 1', extraction 'NoPE'
-    baseline_samples = get_samples(all_samples, media=media, week=week, extraction_type=extraction)
-    X, y = vectorize_data(baseline_samples)
-    
-    # Determine the unique ribotypes in the baseline data.
-    ribotypes = np.unique(y)
-    
-    rf_models = {}
-    biomarkers_info = {}
-    
-    step_bin = bin_size
-    offset = 2000
-    
-    # Train a one-vs-rest RF for each ribotype.
-    for ribo in ribotypes:
-        # Create binary labels: 1 if the sample's class equals the ribotype, else 0.
-        y_binary = (y == ribo).astype(int)
-        
-        # Train the RF model for the current ribotype.
-        rf = RandomForestClassifier(random_state=42)
-        rf.fit(X, y_binary)
-        rf_models[ribo] = rf
-        
-        # Get feature importances and extract top n_biomarkers feature indices.
-        importances = rf.feature_importances_
-        top_features_idx = np.argsort(importances)[-n_biomarkers:]
-        
-        # Store biomarker info (feature index and its corresponding Dalton value) for this ribotype.
-        biomarkers_info[ribo] = []
-        for idx in top_features_idx:
-            peak_Da = idx * step_bin + offset
-            biomarkers_info[ribo].append((idx, peak_Da))
-    
-    return rf_models, biomarkers_info
-
 # --- Variability t-Test Experiments ---
 
-def variability_t_tests(all_samples, biomarkers_info, window=10, significance=0.05, baseline_media="Medio Sc", baseline_week="Semana 1", baseline_extraction="NoPE"):
+def variability_t_tests(all_samples, biomarkers_info, window=10, significance=0.05, baseline_media="Medio Sc", baseline_week="Semana 1", baseline_extraction="NoPE", csv_name="t_test_variability_results.csv"):
     """
     For each ribotype (RTX) and for each biomarker (given by its feature bin and corresponding Da),
     run t-tests comparing the baseline condition (Medio Sc, Semana 1, NoPE) to all variability conditions.
@@ -371,8 +323,8 @@ def variability_t_tests(all_samples, biomarkers_info, window=10, significance=0.
                     })
     
     df_results = pd.DataFrame(results)
-    df_results.to_csv("t_test_variability_results.csv", index=False)
-    print("Saved t-test variability results to t_test_variability_results.csv")
+    df_results.to_csv(csv_name, index=False)
+    print("Saved t-test variability results to ", csv_name)
     return df_results
 
 def evaluate_variability(all_samples, baseline_biomarkers, eval="eval_media", window=50, step_bin=3, offset=2000, baseline_media="Medio Sc", baseline_week="Semana 1", baseline_extraction="NoPE"):
@@ -507,8 +459,6 @@ def evaluate_variability(all_samples, baseline_biomarkers, eval="eval_media", wi
             plt.close()
             print(f"Saved variability plot: {filename}")
             
-
-
 # --- Main Script Execution ---
 
 if __name__ == '__main__':
@@ -556,13 +506,27 @@ if __name__ == '__main__':
         d['spectrum'] = align_spectrum_to_reference(d['spectrum'], mean_baseline, tolerance=0.002)
     
     
-    # Train the baseline model (using SC media, Semana 1, NoPE) and extract biomarkers.
-    rf_model, biomarkers_info = train_baseline_model(all_samples, n_biomarkers=number_biomarkers, bin_size=binning_step, media=baseline_media, week=baseline_week, extraction=baseline_extraction)
-    
-    
+    # Use expert knowledge biomarkers
+    binning_step = 3
+    mz_offset = 2000
+
+    def mz_to_bin(mz, step=binning_step, offset=mz_offset):
+        return int(round((mz - offset) / step))
+
+    biomarkers_info = {}
+    for ribo, mz_list in EK_BIOMARKERS.items():
+        biomarkers_info[ribo] = []
+        for mz in mz_list:
+            bin_idx = mz_to_bin(mz)
+            biomarkers_info[ribo].append((bin_idx, mz))
+
     # Run the variability t-test experiments and export results to CSV.
-    results_df = variability_t_tests(all_samples, biomarkers_info, window=window, baseline_media=baseline_media, baseline_week=baseline_week, baseline_extraction=baseline_extraction)
-    
+    results_df = variability_t_tests(
+        all_samples, biomarkers_info, window=window, 
+        baseline_media=baseline_media, baseline_week=baseline_week, baseline_extraction=baseline_extraction,
+        csv_name="t_test_variability_results_EK.csv"
+    )
+        
     # evaluate_variability(all_samples, biomarkers_info, eval="eval_media", window=10, step_bin=binning_step, offset=2000)
     # evaluate_variability(all_samples, biomarkers_info, eval="eval_time", window=10, step_bin=binning_step, offset=2000)
     # evaluate_variability(all_samples, biomarkers_info, eval="eval_hosp", window=10, step_bin=binning_step, offset=2000)

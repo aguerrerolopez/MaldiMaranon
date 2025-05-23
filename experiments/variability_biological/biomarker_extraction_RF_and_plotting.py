@@ -1,4 +1,16 @@
 #!/usr/bin/env python
+# ------------------------------------------------------------
+# Title: Biomarker Extraction and Visualization for MALDI-TOF Bacterial Strains
+#
+# This script processes MALDI-TOF spectra from multiple bacterial ribotypes,
+# applies preprocessing (variance stabilization, smoothing, baseline correction, normalization, trimming, binning),
+# and trains a Random Forest in a one-vs-rest strategy for each ribotype.
+# For each class, it extracts the top features (biomarkers) by importance.
+# The script then visualizes zoomed-in regions of the mean spectrum around each biomarker,
+# saving these plots to facilitate interpretation of the biomarker signal.
+# The aim is to benchmark the robustness and discriminatory power of these features
+# for each ribotype and provide clear visual evidence for the feature selection process.
+# ------------------------------------------------------------
 # -*- coding: utf-8 -*-
 
 import os

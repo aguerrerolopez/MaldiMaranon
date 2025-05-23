@@ -5,6 +5,7 @@ __pycache__/
 
 results/
 data/clustering/
+experiments/future_ideas/
 .h5
 
 # C extensions

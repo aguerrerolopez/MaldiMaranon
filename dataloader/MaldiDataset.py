@@ -7,136 +7,87 @@ from dataloader.preprocess import SequentialPreprocessor
 from dataloader.SpectrumObject import SpectrumObject
 from tqdm import tqdm
 import h5py
-from sklearn.metrics import pairwise_distances
-
+import torch
+from torch.utils.data import Dataset, DataLoader, random_split
 
 
 # Base from maldi-nn, thanks to the authors. Adapted and expanded by Alejandro Guerrero-López.
 
    
-class MaldiDataset:
-    """MaldiDataset class. Reads a dataset from a directory containing folders with MALDI-TOF spectra.
-    Assumes the following structure:
-    root_dir/
-        year_folder/
-            genus_folder/
-                species_folder/
-                    replicate_folder/
-                        lecture_folder/
-                            acqu
-                            fid
-
-    Parameters
-    ----------
-    root_dir : str
-        Path to the root directory of the dataset
-    preprocess_pipeline : SequentialPreprocessor, optional
-        Preprocessing pipeline to apply to the spectra, by default None
-    
-    Attributes
-    ----------
-    root_dir : str
-        Path to the root directory of the dataset
-    preprocess_pipeline : SequentialPreprocessor
-        Preprocessing pipeline to apply to the spectra
-    data : list
-        List of dictionaries containing the spectrum object and labels
-
-    Methods
-    -------
-    parse_dataset()
-        Parse the dataset and store the spectra in the data attribute
-    get_data()
-        Return the data attribute
-    
-    """
-
-    def __init__(self, root_dir, preprocess_pipeline:SequentialPreprocessor=None, genus=None, species=None, n_samples=None):
+class MaldiDataset(Dataset):
+    def __init__(self, root_dir, preprocess_pipeline: SequentialPreprocessor = None, taxa: list = None, n_samples: int = None):
         self.root_dir = root_dir
         self.preprocess_pipeline = preprocess_pipeline
         self.data = []
-        self.genus = genus if genus else None
-        self.species = species if species else None
-        self.n_samples = n_samples if n_samples else None
+        self.taxa = taxa  # List of genus or genus-species ("Genus species")
+        self.n_samples = n_samples
 
     def parse_dataset(self):
         print(f"Reading dataset from {self.root_dir}")
 
-        def filter_conditions(genus_label, species_folder):
-            # Check if filtering by genus and species
-            if self.genus and genus_label != self.genus:
-                return False
-            if self.species and species_folder != self.species:
-                return False
-            return True
+        def should_include(genus, species):
+            if not self.taxa:
+                return True
 
-        # Get total number of folders for progress bar
+            full_name = f"{genus} {species}"
+
+            for taxon in self.taxa:
+                if " " in taxon:  # Species level filtering
+                    if full_name.lower() == taxon.lower():
+                        return True
+                else:  # Genus level filtering
+                    if genus.lower() == taxon.lower():
+                        return True
+            return False
+
         total_folders = sum(
-            1 for year_folder in os.listdir(self.root_dir) if os.path.isdir(os.path.join(self.root_dir, year_folder))
-            for genus_folder in os.listdir(os.path.join(self.root_dir, year_folder)) if os.path.isdir(os.path.join(self.root_dir, year_folder, genus_folder))
-            for species_folder in os.listdir(os.path.join(self.root_dir, year_folder, genus_folder)) if os.path.isdir(os.path.join(self.root_dir, year_folder, genus_folder, species_folder))
-            for replicate_folder in os.listdir(os.path.join(self.root_dir, year_folder, genus_folder, species_folder)) if os.path.isdir(os.path.join(self.root_dir, year_folder, genus_folder, species_folder, replicate_folder))
+            1 for year in os.listdir(self.root_dir) if os.path.isdir(os.path.join(self.root_dir, year))
+            for genus in os.listdir(os.path.join(self.root_dir, year)) if os.path.isdir(os.path.join(self.root_dir, year, genus))
+            for species in os.listdir(os.path.join(self.root_dir, year, genus)) if os.path.isdir(os.path.join(self.root_dir, year, genus, species))
+            for replicate in os.listdir(os.path.join(self.root_dir, year, genus, species)) if os.path.isdir(os.path.join(self.root_dir, year, genus, species, replicate))
         )
 
         with tqdm(total=total_folders, desc="Processing Dataset", unit="folder") as pbar:
-            for year_folder in os.listdir(self.root_dir):
-                year_folder_path = os.path.join(self.root_dir, year_folder)
-                if os.path.isdir(year_folder_path):
-                    year_label = year_folder
-                    for genus_folder in os.listdir(year_folder_path):
-                        genus_folder_path = os.path.join(year_folder_path, genus_folder)
-                        if os.path.isdir(genus_folder_path):
-                            genus_label = genus_folder
-                            for species_folder in os.listdir(genus_folder_path):
-                                species_folder_path = os.path.join(genus_folder_path, species_folder)
-                                if os.path.isdir(species_folder_path):
-                                    genus_species_label = f"{genus_label} {species_folder}"
+            for year in os.listdir(self.root_dir):
+                year_path = os.path.join(self.root_dir, year)
+                if os.path.isdir(year_path):
+                    for genus in os.listdir(year_path):
+                        genus_path = os.path.join(year_path, genus)
+                        if os.path.isdir(genus_path):
+                            for species in os.listdir(genus_path):
+                                species_path = os.path.join(genus_path, species)
+                                if os.path.isdir(species_path) and should_include(genus, species):
+                                    genus_species_label = f"{genus} {species}"
 
-                                    # Apply filtering conditions
-                                    if not filter_conditions(genus_label, species_folder):
-                                        continue
-
-                                    for replicate_folder in os.listdir(species_folder_path):
-                                        replicate_folder_path = os.path.join(species_folder_path, replicate_folder)
-                                        if os.path.isdir(replicate_folder_path):
-                                            for lecture_folder in os.listdir(replicate_folder_path):
-                                                lecture_folder_path = os.path.join(replicate_folder_path, lecture_folder)
-                                                if os.path.isdir(lecture_folder_path):
-                                                    # Search for "acqu" and "fid" files
-                                                    acqu_file, fid_file = self._find_acqu_fid_files(lecture_folder_path)
+                                    for replicate in os.listdir(species_path):
+                                        replicate_path = os.path.join(species_path, replicate)
+                                        if os.path.isdir(replicate_path):
+                                            for lecture in os.listdir(replicate_path):
+                                                lecture_path = os.path.join(replicate_path, lecture)
+                                                if os.path.isdir(lecture_path):
+                                                    acqu_file, fid_file = self._find_acqu_fid_files(lecture_path)
                                                     if acqu_file and fid_file:
-                                                        # Read the maldi-tof spectra using from_bruker
                                                         spectrum = SpectrumObject.from_bruker(acqu_file, fid_file)
-                                                        # Preprocessing pipeline if any
                                                         if self.preprocess_pipeline:
                                                             spectrum = self.preprocess_pipeline(spectrum)
-                                                        # Skip if the spectrum is NaN due to preprocessing
                                                         if np.isnan(spectrum.intensity).any():
-                                                            print("Skipping NaN spectrum")
                                                             continue
                                                         self.data.append({
                                                             'spectrum_intensity': spectrum.intensity,
                                                             'spectrum_mz': spectrum.mz,
-                                                            'year_label': year_label,
-                                                            'genus_label': genus_label,
+                                                            'year_label': year,
+                                                            'genus_label': genus,
                                                             'genus_species_label': genus_species_label,
                                                         })
                                             pbar.update(1)
 
-        # Subsample if n_samples is specified
         if self.n_samples and len(self.data) > self.n_samples:
             print(f"Subsampling to {self.n_samples} samples from {len(self.data)}.")
             np.random.shuffle(self.data)
             self.data = self.data[:self.n_samples]
 
-
-
-    def _parse_folder_name(self, folder_name):
-        # Split folder name into genus, species, and hospital code
-        parts = folder_name.split()
-        genus_species = " ".join(parts[:2])
-        hospital_code = " ".join(parts[2:])
-        return genus_species, hospital_code
+    def __len__(self):
+        return len(self.data)
     
     def _find_acqu_fid_files(self, directory):
         acqu_file = None
@@ -150,6 +101,65 @@ class MaldiDataset:
                 if acqu_file and fid_file:
                     return acqu_file, fid_file
         return acqu_file, fid_file
+
+    def get_data(self):
+        return self.data
+    
+    def pad_collate_fn(batch):
+        """
+        Pads the 'intensity' and 'mz' tensors to the length of the longest one in the batch.
+        Other fields are collected into lists.
+        """
+        # Determine the maximum length in the current batch.
+        max_len = max(item['intensity'].size(0) for item in batch)
+        
+        intensities = []
+        mzs = []
+        year_labels = []
+        genus_labels = []
+        species_labels = []
+        
+        for item in batch:
+            intensity = item['intensity']
+            mz = item['mz']
+            pad_size = max_len - intensity.size(0)
+            # Pad at the end with zeros.
+            intensity_padded = F.pad(intensity, (0, pad_size), mode='constant', value=0)
+            mz_padded = F.pad(mz, (0, pad_size), mode='constant', value=0)
+            intensities.append(intensity_padded)
+            mzs.append(mz_padded)
+            year_labels.append(item['year_label'])
+            genus_labels.append(item['genus_label'])
+            species_labels.append(item['genus_species_label'])
+            
+        batch_intensity = torch.stack(intensities)  # [batch_size, max_len]
+        batch_mz = torch.stack(mzs)               # [batch_size, max_len]
+        
+        return {
+            'intensity': batch_intensity,
+            'mz': batch_mz,
+            'year_label': year_labels,
+            'genus_label': genus_labels,
+            'genus_species_label': species_labels
+        }
+    
+    def __getitem__(self, idx):
+        # Get the dictionary for the sample.
+        item = self.data[idx]
+        
+        # Convert the numpy arrays to torch tensors.
+        intensity = torch.tensor(item['spectrum_intensity'], dtype=torch.float32)
+        mz = torch.tensor(item['spectrum_mz'], dtype=torch.float32)
+
+        return intensity, mz, item['year_label'], item['genus_label'], item['genus_species_label']
+
+    def _parse_folder_name(self, folder_name):
+        # Split folder name into genus, species, and hospital code
+        parts = folder_name.split()
+        genus_species = " ".join(parts[:2])
+        hospital_code = " ".join(parts[2:])
+        return genus_species, hospital_code
+    
 
     def save_to_hdf5(self, file_name):
         with h5py.File(file_name, 'w') as h5f:
