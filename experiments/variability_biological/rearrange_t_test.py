@@ -1,3 +1,8 @@
+### This script processes CSV files containing variability codes and generates heatmaps for CODE I and CODE S.
+# It reads the CSV files, pivots the data to create matrices for CODE I and CODE S, and then generates heatmaps for each condition.
+# The heatmaps are saved as PNG files, and the pivot matrices are saved as CSV files.
+
+
 import pandas as pd
 import glob
 import os
